@@ -1,34 +1,196 @@
 // screens/HomeScreen.js
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  SafeAreaView, ScrollView, StatusBar, Platform, Alert // Removed Image import
+  SafeAreaView, ScrollView, StatusBar, Platform, Alert,
+  Modal, ActivityIndicator, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { LinearGradient } from 'expo-linear-gradient';
 
-const THEME_COLOR = '#00C853'; // Your app's primary green
+// Assuming THEME_COLOR is defined in dummyData or your constants file
+import { DUMMY_PRODUCTS, THEME_COLOR_PRIMARY as THEME_COLOR } from '../config/dummyData';
+import ProductDetailCard from '../components/ProductDetailCard';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 const HomeScreen = ({ navigation }) => {
   const [searchText, setSearchText] = useState('');
-  const [showAlert, setShowAlert] = useState(true);
+  const [currentProduct, setCurrentProduct] = useState(null);
 
-  const handleScanPress = () => {
-    console.log('Scan button pressed');
-    Alert.alert("Scan", "Camera/Scan functionality to be implemented.");
+  const [permission, requestPermission] = useCameraPermissions();
+  const [isCameraModalVisible, setIsCameraModalVisible] = useState(false);
+  const [scanned, setScanned] = useState(false);
+
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(3); // Example unread count, fetch this dynamically later
+
+  useEffect(() => {
+    if (permission && !permission.granted && permission.canAskAgain) {
+        console.log("[HomeScreen] Initial permission check, requesting.");
+        requestPermission();
+    } else if (permission && permission.granted) {
+        console.log("[HomeScreen] Camera permission already granted.");
+    }
+  }, [permission, requestPermission]);
+
+
+  const fetchProductData = (identifier, isFromScan = false) => {
+    console.log(`[HomeScreen] fetchProductData called with identifier: "${identifier}", isFromScan: ${isFromScan}`);
+    let product = null;
+    const identifierLower = typeof identifier === 'string' ? identifier.toLowerCase() : identifier;
+
+    if (DUMMY_PRODUCTS[identifier]) {
+      product = DUMMY_PRODUCTS[identifier];
+    } else if (DUMMY_PRODUCTS[identifierLower]) {
+      product = DUMMY_PRODUCTS[identifierLower];
+    }
+
+    if (product) {
+      console.log("[HomeScreen] Product found by direct key:", product.name);
+      setCurrentProduct(product);
+      setSearchText(product.name);
+    } else {
+      console.log("[HomeScreen] Product NOT found for identifier:", identifier);
+      setCurrentProduct(null);
+      Alert.alert(
+        "Product Not Found",
+        `We couldn't find "${identifier}" in our database. Would you like to help add it?`,
+        [
+          { text: "Not Now", style: "cancel", onPress: () => { if (!isFromScan) setSearchText(''); } },
+          {
+            text: "Yes, Contribute",
+            onPress: () => navigation.navigate('ContributeProduct', {
+              searchTerm: isFromScan ? '' : identifier,
+              barcode: isFromScan ? identifier : '',
+            }),
+          },
+        ]
+      );
+    }
   };
+
+  const handleSearchIconPress = () => {
+    const searchTermToProcess = searchText.trim();
+    if (!searchTermToProcess) {
+      setCurrentProduct(null);
+      return;
+    }
+    console.log("[HomeScreen] handleSearchIconPress with searchTerm:", searchTermToProcess);
+    const searchTermLower = searchTermToProcess.toLowerCase();
+
+    if (DUMMY_PRODUCTS[searchTermToProcess] || DUMMY_PRODUCTS[searchTermLower]) {
+      console.log("[HomeScreen] Search term matches a product key directly.");
+      fetchProductData(DUMMY_PRODUCTS[searchTermToProcess] ? searchTermToProcess : searchTermLower, false);
+      return;
+    }
+
+    const foundProductKeyByName = Object.keys(DUMMY_PRODUCTS).find(
+      key => DUMMY_PRODUCTS[key].name.toLowerCase().includes(searchTermLower)
+    );
+
+    if (foundProductKeyByName) {
+      console.log("[HomeScreen] Product found by name search, key:", foundProductKeyByName);
+      fetchProductData(foundProductKeyByName, false);
+    } else {
+      console.log("[HomeScreen] No product found by key or name search for term:", searchTermToProcess);
+      setCurrentProduct(null);
+      Alert.alert(
+        "Product Not Found",
+        `No product found matching "${searchTermToProcess}". Would you like to contribute it?`,
+        [
+          { text: "Cancel", style: "cancel", onPress: () => setSearchText('') },
+          {
+            text: "Contribute",
+            onPress: () => navigation.navigate('ContributeProduct', {
+              searchTerm: searchTermToProcess,
+              barcode: '',
+            }),
+          },
+        ]
+      );
+    }
+  };
+
+  const handleOpenScannerModal = async () => {
+    console.log("[HomeScreen] Opening scanner modal. Current permission:", permission);
+    let currentPermissionStatus = permission;
+
+    if (!currentPermissionStatus || !currentPermissionStatus.granted) {
+        console.log("[HomeScreen] Requesting/Re-requesting camera permission.");
+        currentPermissionStatus = await requestPermission();
+    }
+
+    if (currentPermissionStatus && currentPermissionStatus.granted) {
+      console.log("[HomeScreen] Camera permission granted. Opening modal.");
+      setScanned(false);
+      setIsCameraModalVisible(true);
+    } else {
+      if (currentPermissionStatus && !currentPermissionStatus.canAskAgain) {
+          Alert.alert(
+              "Camera Permission Required",
+              "Camera permission has been permanently denied. Please enable it in your device settings to use the scanner."
+          );
+      } else {
+          Alert.alert(
+              "Camera Permission Denied",
+              "Camera access is needed to scan barcodes. Please grant permission if prompted again."
+          );
+      }
+    }
+  };
+
+  const handleBarCodeScanned = (scanningResult) => {
+    if (scanned) return;
+    const { data: barcodeData } = scanningResult;
+    console.log("[HomeScreen] Barcode scanned, data:", barcodeData);
+    setScanned(true);
+    setIsCameraModalVisible(false);
+    fetchProductData(barcodeData, true);
+  };
+
+  const handleClearProduct = () => {
+    console.log("[HomeScreen] Clearing current product.");
+    setCurrentProduct(null);
+    setSearchText('');
+  };
+
+  if (permission === null && Platform.OS !== 'web') {
+    return (
+      <SafeAreaView style={[styles.safeArea, {justifyContent: 'center', alignItems: 'center'}]}>
+        <ActivityIndicator size="large" color={THEME_COLOR} />
+        <Text style={{marginTop: 10, color: '#555'}}>Checking camera permission...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle={Platform.OS === 'ios' ? "light-content" : "light-content"} backgroundColor={THEME_COLOR} />
+      <StatusBar barStyle="light-content" backgroundColor={THEME_COLOR} />
 
-      {/* Custom Header */}
-      <View style={styles.headerContainer}>
-        <View style={styles.headerContent}>
-          <View style={styles.headerLeftPlaceholder} /> {/* Empty view for balance */}
-          <Text style={styles.headerTitle}>SCAN</Text>
-          <View style={styles.headerRightPlaceholder} /> {/* Empty view for balance */}
-        </View>
-      </View>
+      {/* HEADER WITH BELL ICON */}
+      <LinearGradient
+        colors={THEME_COLOR ? [THEME_COLOR, '#00A040'] : ['#00C853', '#00A040']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerContainer}
+      >
+        <View style={styles.headerIconPlaceholder} /> {/* For balance if title is not perfectly centered */}
+        <Text style={styles.headerTitle}>SCAN & DISCOVER</Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('Notifications')} // Make sure 'Notifications' screen is in your navigator
+          style={styles.notificationBell}
+        >
+          <Ionicons name="notifications-outline" size={26} color="#fff" />
+          {unreadNotificationsCount > 0 && (
+            <View style={styles.notificationBadge}>
+              <Text style={styles.notificationBadgeText}>
+                {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </LinearGradient>
 
       <ScrollView
         style={styles.scrollView}
@@ -36,49 +198,89 @@ const HomeScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Search Bar */}
         <View style={styles.searchBarContainer}>
-          <Ionicons name="search-outline" size={22} color="#757575" style={styles.searchIcon} />
+          <TouchableOpacity onPress={handleSearchIconPress} style={styles.searchIconButton}>
+            <Ionicons name="search-outline" size={24} color="#757575" />
+          </TouchableOpacity>
           <TextInput
-            placeholder="Search Product with Name"
+            placeholder="Search Product Name or Key"
             placeholderTextColor="#A0A0A0"
             style={styles.searchInput}
             value={searchText}
-            onChangeText={setSearchText}
+            onChangeText={(text) => {
+                setSearchText(text);
+                if(text.trim() === '' && currentProduct) {
+                    setCurrentProduct(null);
+                }
+            }}
+            onSubmitEditing={handleSearchIconPress}
+            returnKeyType="search"
           />
+          <TouchableOpacity onPress={handleOpenScannerModal} style={styles.barcodeIconContainer}>
+            <Ionicons name="barcode-outline" size={28} color={THEME_COLOR || '#00C853'} />
+          </TouchableOpacity>
         </View>
 
-        {/* Scanner Area */}
-        <View style={styles.scannerArea}>
-          <View style={[styles.scannerCorner, styles.topLeft]} />
-          <View style={[styles.scannerCorner, styles.topRight]} />
-          <View style={styles.scannerHorizontalLine} />
-          <View style={[styles.scannerCorner, styles.bottomLeft]} />
-          <View style={[styles.scannerCorner, styles.bottomRight]} />
-        </View>
-
-        {/* Health Risk Alert Card */}
-        {showAlert && (
-          <View style={styles.alertCard}>
-            <View style={styles.alertCardHeader}>
-              <Ionicons name="warning-outline" size={24} color="#D35400" style={styles.alertIcon} />
-              <Text style={styles.alertTitle}>Health Risk Alerts</Text>
-              <TouchableOpacity onPress={() => setShowAlert(false)} style={styles.alertCloseButton}>
-                <Ionicons name="close-outline" size={24} color="#555" />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.alertText}>
-              Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard.
+        {currentProduct ? (
+          <ProductDetailCard product={currentProduct} onClearProduct={handleClearProduct} />
+        ) : (
+          <View style={styles.contentPlaceholder}>
+            <Ionicons name="fast-food-outline" size={screenWidth * 0.15} color="#D1D5DB" style={{ marginBottom: 15 }} />
+            <Text style={styles.placeholderTitle}>Find Your Food</Text>
+            <Text style={styles.placeholderText}>
+              Scan a product barcode or search by name to view its details, allergens, and healthier alternatives.
             </Text>
+            <Text style={styles.placeholderSmallText}>Try searching "Pan Cakes" or "Organic Milk Bread".</Text>
+            <Text style={styles.placeholderSmallText}>Or enter a key: "pancakes123" or "milkbread456".</Text>
           </View>
         )}
-
-        {/* Scan Button */}
-        <TouchableOpacity style={styles.scanButton} onPress={handleScanPress}>
-          <Text style={styles.scanButtonText}>Scan</Text>
-        </TouchableOpacity>
-
       </ScrollView>
+
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isCameraModalVisible}
+        onRequestClose={() => { setIsCameraModalVisible(false); setScanned(false); }}
+      >
+        <SafeAreaView style={styles.modalSafeArea}>
+          {permission && permission.granted ? (
+            <CameraView
+              style={StyleSheet.absoluteFill}
+              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+              barcodeScannerSettings={{
+                barcodeTypes: ["qr", "ean13", "ean8", "upc_a", "upc_e", "code39", "code128", "pdf417", "aztec", "datamatrix"],
+              }}
+            >
+              <View style={styles.cameraModalOverlay}>
+                <View style={styles.scannerFocusBoxOuter}>
+                    <View style={styles.scannerFocusBoxInner} />
+                </View>
+                <Text style={styles.scannerInstructionText}>Align barcode within the frame</Text>
+              </View>
+            </CameraView>
+          ) : (
+            <View style={styles.permissionDeniedContainer}>
+              <Ionicons name="camera-off-outline" size={60} color="rgba(255,255,255,0.7)" style={{marginBottom: 20}}/>
+              <Text style={styles.permissionDeniedText}>
+                {permission === null ? "Initializing camera..." :
+                 !permission?.granted && permission?.canAskAgain ? "Camera access is needed to scan barcodes." :
+                 "Camera permission denied. Please enable it in your device settings to use the scanner."}
+              </Text>
+              {permission && !permission.granted && permission.canAskAgain && (
+                  <TouchableOpacity style={styles.requestPermissionButton} onPress={requestPermission}>
+                      <Text style={styles.requestPermissionButtonText}>Grant Permission</Text>
+                  </TouchableOpacity>
+              )}
+            </View>
+          )}
+          <TouchableOpacity
+            style={styles.closeModalButton}
+            onPress={() => { setIsCameraModalVisible(false); setScanned(false); }}
+          >
+            <Ionicons name="close-circle" size={36} color="white" />
+          </TouchableOpacity>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -86,122 +288,202 @@ const HomeScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#F4F6F8',
   },
+  // UPDATED/ADDED HEADER STYLES FOR BELL ICON
   headerContainer: {
-    backgroundColor: THEME_COLOR,
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-    zIndex: 10,
+    flexDirection: 'row', // To allow items side-by-side
+    justifyContent: 'space-between', // Pushes title to center, icons to sides
+    alignItems: 'center', // Vertical alignment
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 8 : 15,
+    paddingBottom: 18,
+    paddingHorizontal: 15, // Horizontal padding for the whole header
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
   },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between', // This will center the title if placeholders are equal
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    height: 60,
-  },
-  headerLeftPlaceholder: { // To balance the flexbox, make its width non-zero or adjust justify
-    width: 40, // Give it some width, or remove if title should be left-aligned
+  headerIconPlaceholder: { // To balance the title if one side has an icon and other doesn't
+    width: 30, // Adjust to roughly match the width of your icon + padding
   },
   headerTitle: {
     color: '#fff',
     fontSize: 20,
     fontWeight: 'bold',
-    textAlign: 'center', // Ensure title is centered if placeholders have width
-    flex: 1, // Allow title to take available space if placeholders have fixed width
+    // textAlign: 'center', // Not needed if using space-between and placeholder for balance
   },
-  headerRightPlaceholder: {
-    width: 40, // Match left placeholder or adjust as needed
+  notificationBell: {
+    padding: 5, // Make touchable area slightly larger
+    position: 'relative', // For positioning the badge
   },
+  notificationBadge: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    backgroundColor: 'red',
+    borderRadius: 9, // Make it circular
+    width: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1, // Optional: white border around badge
+    borderColor: '#fff',
+  },
+  notificationBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  // END OF UPDATED/ADDED HEADER STYLES
+
   scrollView: {
     flex: 1,
-    backgroundColor: '#F4F6F8',
   },
   scrollViewContent: {
-    paddingHorizontal: 20,
-    paddingTop: 30,
-    paddingBottom: 20,
+    paddingHorizontal: 15,
+    paddingTop: 20,
+    paddingBottom: Platform.OS === 'ios' ? 100 : 80,
     alignItems: 'center',
   },
   searchBarContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 15,
-    marginBottom: 25,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 25,
+    paddingHorizontal: 5,
+    marginBottom: 20,
     width: '100%',
+    maxWidth: 500,
     height: 50,
-    elevation: 2,
-    shadowColor: '#000',
+    elevation: 3,
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
   },
-  searchIcon: {
-    marginRight: 10,
+  searchIconButton: {
+      padding: 10,
   },
   searchInput: {
     flex: 1,
-    fontSize: 16,
-    color: '#333',
+    fontSize: 15,
+    color: '#333333',
+    height: '100%',
+    paddingLeft: 5,
   },
-  scannerArea: {
-    width: '90%',
-    aspectRatio: 1.5 / 1,
-    backgroundColor: '#757575',
-    borderRadius: 20,
-    marginBottom: 25,
+  barcodeIconContainer: {
+    paddingHorizontal: 12,
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    position: 'relative',
+    borderLeftWidth: 1,
+    borderLeftColor: '#E8E8E8',
+    marginLeft: 8,
   },
-  scannerCorner: {
-    width: 40,
-    height: 40,
-    borderColor: '#FFF',
-    borderWidth: 3,
-    position: 'absolute',
-  },
-  topLeft: { top: 20, left: 20, borderRightWidth: 0, borderBottomWidth: 0 },
-  topRight: { top: 20, right: 20, borderLeftWidth: 0, borderBottomWidth: 0 },
-  bottomLeft: { bottom: 20, left: 20, borderRightWidth: 0, borderTopWidth: 0 },
-  bottomRight: { bottom: 20, right: 20, borderLeftWidth: 0, borderTopWidth: 0 },
-  scannerHorizontalLine: { width: '60%', height: 2, backgroundColor: '#FFF', position: 'absolute' },
-  alertCard: {
-    backgroundColor: '#FFF9C4',
-    borderRadius: 15,
-    padding: 15,
-    marginBottom: 25,
+  contentPlaceholder: {
+    marginTop: 25,
+    alignItems: 'center',
+    paddingVertical: 30,
+    paddingHorizontal: 20,
     width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
     elevation: 2,
-    shadowColor: '#000',
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 2,
   },
-  alertCardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  alertIcon: { marginRight: 10 },
-  alertTitle: { flex: 1, fontSize: 16, fontWeight: 'bold', color: '#333' },
-  alertCloseButton: { padding: 5 },
-  alertText: { fontSize: 14, color: '#555', lineHeight: 20 },
-  scanButton: {
-    backgroundColor: THEME_COLOR,
-    paddingVertical: 15,
-    paddingHorizontal: 60,
-    borderRadius: 30,
-    width: '80%',
-    alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
+  placeholderTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2C3E50',
+    marginBottom: 10,
+    textAlign: 'center',
   },
-  scanButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  placeholderText: {
+    fontSize: 14,
+    color: '#566573',
+    textAlign: 'center',
+    lineHeight: 21,
+    marginBottom: 12,
+  },
+   placeholderSmallText: {
+    fontSize: 12,
+    color: '#7F8C8D',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  modalSafeArea: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  permissionDeniedContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'black',
+    padding: 30,
+  },
+  permissionDeniedText: {
+    color: 'white',
+    fontSize: 17,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 20,
+  },
+  requestPermissionButton: {
+      backgroundColor: THEME_COLOR || '#00C853',
+      paddingVertical: 12,
+      paddingHorizontal: 25,
+      borderRadius: 25,
+  },
+  requestPermissionButtonText: {
+      color: 'white',
+      fontSize: 16,
+      fontWeight: 'bold',
+  },
+  cameraModalOverlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scannerFocusBoxOuter: {
+    flex:1,
+    width: '100%',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  scannerFocusBoxInner: {
+    width: screenWidth * 0.75,
+    height: screenWidth * 0.45,
+    borderColor: 'rgba(255,255,255,0.8)',
+    borderWidth: 2,
+    borderRadius: 12,
+  },
+  scannerInstructionText: {
+    position: 'absolute',
+    bottom: screenHeight * 0.12,
+    fontSize: 15,
+    color: 'white',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+    textAlign: 'center',
+  },
+  closeModalButton: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 55 : 25,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderRadius: 20,
+    padding: 6,
+    zIndex: 10,
+  },
 });
 
 export default HomeScreen;
