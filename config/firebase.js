@@ -1,7 +1,11 @@
 // config/firebase.js
-import { initializeApp } from '@firebase/app';
-import { getAuth } from '@firebase/auth';
-import { getFirestore } from '@firebase/firestore';
+import { initializeApp } from '@firebase/app'; // Correct, can also be "firebase/app"
+// Import the new Auth initialization functions
+import { initializeAuth, getReactNativePersistence } from 'firebase/auth'; // Changed from getAuth
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { getFirestore } from '@firebase/firestore'; // Correct, can also be "firebase/firestore"
+// If you plan to use Firebase Storage for file uploads (like custom avatars later)
+// import { getStorage } from 'firebase/storage';
 
 // Your Firebase configuration
 const firebaseConfig = {
@@ -14,9 +18,19 @@ const firebaseConfig = {
   measurementId: "G-DGD7895HYF"
 };
 
-// Initialize Firebase
+// Initialize Firebase App
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+
+// Initialize Auth with persistence for React Native
+const auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+});
+
+// Initialize Firestore
 const db = getFirestore(app);
 
-export { auth, db };
+// Initialize Firebase Storage (optional, if you need it)
+// const storage = getStorage(app);
+
+// Export the initialized services
+export { auth, db, app /*, storage */ };
